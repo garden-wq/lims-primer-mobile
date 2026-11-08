@@ -55,29 +55,51 @@ h1 { margin: 0; font-size: 18px; }
 }
 #filter[aria-pressed="true"] { background: var(--accent); color: #fff; }
 main { padding: 8px 12px 32px; }
+.group { margin-bottom: 8px; scroll-margin-top: 104px; }
+.group[hidden] { display: none; }
+.group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 56px;
+  padding: 10px 14px;
+  border: 0;
+  border-radius: 10px;
+  font: inherit;
+  text-align: left;
+}
+.group-name { flex: 1; min-width: 0; font-size: 20px; font-weight: 800; overflow-wrap: anywhere; }
+.group-count { font-size: 15px; font-weight: 700; white-space: nowrap; }
+.group-miss {
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--miss);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.group-miss[hidden] { display: none; }
+.group-arrow { font-size: 14px; }
+.group-body { padding-top: 6px; }
+.group-body[hidden] { display: none; }
 .row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(76px, 34%) 56px;
+  grid-template-columns: minmax(0, 1fr) 56px;
   align-items: center;
   gap: 8px;
   margin-bottom: 6px;
-  padding: 10px;
+  padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: #fff;
 }
 .row[hidden] { display: none; }
 .row.miss { border-color: var(--miss); background: var(--miss-bg); }
-.primer { font-size: 16px; font-weight: 800; overflow-wrap: anywhere; }
-.cust { margin-top: 2px; font-size: 14px; font-weight: 600; color: var(--muted); overflow-wrap: anywhere; }
-.box {
-  padding: 8px 4px;
-  border-radius: 6px;
-  font-size: 15px;
-  font-weight: 800;
-  text-align: center;
-  overflow-wrap: anywhere;
-}
+.primer { font-size: 18px; font-weight: 800; overflow-wrap: anywhere; }
+.cust { margin-top: 2px; font-size: 15px; font-weight: 600; color: var(--muted); overflow-wrap: anywhere; }
+#empty { padding: 32px 16px; font-size: 15px; text-align: center; color: var(--muted); }
 .check {
   display: flex;
   flex-direction: column;
@@ -102,6 +124,7 @@ main { padding: 8px 12px 32px; }
   </div>
 </header>
 <main id="list"></main>
+<div id="empty" hidden>체크한 프라이머가 없습니다.</div>
 <div id="message" hidden></div>
 
 <script>
@@ -184,6 +207,10 @@ main { padding: 8px 12px 32px; }
     var checks = loadChecks(storageKey);
     var onlyMissing = false;
     var rows = [];
+    var groups = [];
+    var groupByName = {};
+    var openGroup = null;
+    var emptyEl = document.getElementById('empty');
 
     document.title = data.s + ' 프라이머 박스';
     document.getElementById('sheet').textContent = data.s;
@@ -201,9 +228,72 @@ main { padding: 8px 12px 32px; }
         r.el.classList.toggle('miss', r.input.checked);
         r.el.hidden = onlyMissing && !r.input.checked;
       });
+
+      groups.forEach(function (g) {
+        var groupMissing = g.rows.filter(function (r) { return r.input.checked; }).length;
+        var expanded = onlyMissing || g === openGroup;
+        g.el.hidden = onlyMissing && groupMissing === 0;
+        g.body.hidden = !expanded;
+        g.head.setAttribute('aria-expanded', String(expanded));
+        g.arrow.textContent = expanded ? '▲' : '▼';
+        g.missBadge.textContent = '못 찾음 ' + groupMissing;
+        g.missBadge.hidden = groupMissing === 0;
+      });
+
+      emptyEl.hidden = !(onlyMissing && missing === 0);
+    }
+
+    // '박스#칸번호' 형식은 같은 박스로 묶고 칸번호는 프라이머 줄에 표시
+    function getGroup(boxName) {
+      var name = String(boxName).split('#')[0].trim() || String(boxName);
+      if (Object.prototype.hasOwnProperty.call(groupByName, name)) {
+        return groupByName[name];
+      }
+
+      var el = document.createElement('section');
+      el.className = 'group';
+
+      var headBtn = document.createElement('button');
+      headBtn.type = 'button';
+      headBtn.className = 'group-head';
+      var c = boxColor(name);
+      headBtn.style.background = c.bg;
+      headBtn.style.color = c.color;
+
+      var nameEl = document.createElement('span');
+      nameEl.className = 'group-name';
+      nameEl.textContent = name;
+      var missBadge = document.createElement('span');
+      missBadge.className = 'group-miss';
+      var countText = document.createElement('span');
+      countText.className = 'group-count';
+      var arrow = document.createElement('span');
+      arrow.className = 'group-arrow';
+      headBtn.append(nameEl, missBadge, countText, arrow);
+
+      var body = document.createElement('div');
+      body.className = 'group-body';
+      el.append(headBtn, body);
+      list.append(el);
+
+      var group = {
+        el: el, head: headBtn, body: body, arrow: arrow,
+        missBadge: missBadge, countText: countText, rows: []
+      };
+      groups.push(group);
+      groupByName[name] = group;
+
+      headBtn.addEventListener('click', function () {
+        if (onlyMissing) return;
+        openGroup = openGroup === group ? null : group;
+        refresh();
+        if (openGroup === group) el.scrollIntoView({ block: 'start' });
+      });
+      return group;
     }
 
     data.i.forEach(function (item, index) {
+      var group = getGroup(item[2]);
       var el = document.createElement('div');
       el.className = 'row';
 
@@ -213,15 +303,9 @@ main { padding: 8px 12px 32px; }
       primer.textContent = item[0];
       var cust = document.createElement('div');
       cust.className = 'cust';
-      cust.textContent = item[1];
+      var slot = String(item[2]).indexOf('#') !== -1 ? ' · ' + item[2] : '';
+      cust.textContent = item[1] + slot;
       info.append(primer, cust);
-
-      var box = document.createElement('div');
-      box.className = 'box';
-      box.textContent = item[2];
-      var c = boxColor(item[2]);
-      box.style.background = c.bg;
-      box.style.color = c.color;
 
       var label = document.createElement('label');
       label.className = 'check';
@@ -237,10 +321,17 @@ main { padding: 8px 12px 32px; }
       });
       label.append(input, '못 찾음');
 
-      el.append(info, box, label);
-      list.append(el);
-      rows.push({ el: el, input: input });
+      el.append(info, label);
+      group.body.append(el);
+      var row = { el: el, input: input };
+      rows.push(row);
+      group.rows.push(row);
     });
+
+    groups.forEach(function (g) {
+      g.countText.textContent = g.rows.length + '개';
+    });
+    if (groups.length === 1) openGroup = groups[0];
 
     filterBtn.addEventListener('click', function () {
       onlyMissing = !onlyMissing;
