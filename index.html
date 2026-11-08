@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<meta name="referrer" content="no-referrer">
+<title>프라이머 박스 목록</title>
+<style>
+:root {
+  color-scheme: light;
+  --ink: #111;
+  --muted: #555;
+  --line: #ddd;
+  --accent: #0064FF;
+  --miss: #dc3545;
+  --miss-bg: #ffe9ec;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: #f4f5f7;
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif;
+  -webkit-text-size-adjust: 100%;
+}
+header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 12px 16px;
+  background: #fff;
+  border-bottom: 1px solid var(--line);
+}
+h1 { margin: 0; font-size: 18px; }
+.bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 14px;
+}
+#count { font-weight: 700; }
+#count b { color: var(--miss); font-size: 17px; }
+#filter {
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 700;
+}
+#filter[aria-pressed="true"] { background: var(--accent); color: #fff; }
+main { padding: 8px 12px 32px; }
+.row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(76px, 34%) 56px;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+}
+.row.miss { border-color: var(--miss); background: var(--miss-bg); }
+.primer { font-size: 16px; font-weight: 800; overflow-wrap: anywhere; }
+.cust { margin-top: 2px; font-size: 14px; font-weight: 600; color: var(--muted); overflow-wrap: anywhere; }
+.box {
+  padding: 8px 4px;
+  border-radius: 6px;
+  font-size: 15px;
+  font-weight: 800;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+.check {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-height: 48px;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--miss);
+}
+.check input { width: 26px; height: 26px; margin: 0; accent-color: var(--miss); }
+#message { padding: 40px 20px; font-size: 16px; line-height: 1.5; text-align: center; }
+</style>
+</head>
+<body>
+<header hidden id="head">
+  <h1 id="sheet"></h1>
+  <div class="bar">
+    <span id="count"></span>
+    <button id="filter" type="button" aria-pressed="false">못 찾은 것만</button>
+  </div>
+</header>
+<main id="list"></main>
+<div id="message" hidden></div>
+
+<script>
+(function () {
+  'use strict';
+
+  var BOX_COLORS = {
+    C: { bg: '#ffe0e6', color: '#d63384' },
+    H: { bg: '#e6f4ea', color: '#137333' },
+    K: { bg: '#fff3cd', color: '#856404' },
+    P: { bg: '#ffe8cc', color: '#e8590c' },
+    A: { bg: '#e3faf8', color: '#121212' },
+    B: { bg: '#f4fce3', color: '#5c940d' },
+    '제작': { bg: '#f3d9fa', color: '#9c36b5' }
+  };
+  var ETC_COLOR = { bg: '#e8e8ff', color: '#2b2b88' };
+
+  var head = document.getElementById('head');
+  var list = document.getElementById('list');
+  var message = document.getElementById('message');
+  var countEl = document.getElementById('count');
+  var filterBtn = document.getElementById('filter');
+
+  function showMessage(text) {
+    head.hidden = true;
+    list.textContent = '';
+    message.textContent = text;
+    message.hidden = false;
+  }
+
+  function boxColor(name) {
+    var upper = String(name).toUpperCase();
+    if (BOX_COLORS[upper]) return BOX_COLORS[upper];
+    if (upper.indexOf('제작') !== -1) return BOX_COLORS['제작'];
+    return BOX_COLORS[upper.charAt(0)] || ETC_COLOR;
+  }
+
+  function base64UrlToBytes(text) {
+    var b64 = text.replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4) b64 += '=';
+    var bin = atob(b64);
+    var bytes = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes;
+  }
+
+  function inflate(bytes) {
+    var stream = new Blob([bytes]).stream()
+      .pipeThrough(new DecompressionStream('deflate-raw'));
+    return new Response(stream).text();
+  }
+
+  function hashText(text) {
+    var h = 5381;
+    for (var i = 0; i < text.length; i++) {
+      h = ((h * 33) ^ text.charCodeAt(i)) >>> 0;
+    }
+    return h.toString(36);
+  }
+
+  // 브라우저 저장소가 막혀 있어도 화면은 계속 동작하도록 처리
+  function loadChecks(key) {
+    try {
+      var parsed = JSON.parse(localStorage.getItem(key) || '{}');
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (err) {
+      return {};
+    }
+  }
+
+  function saveChecks(key, checks) {
+    try {
+      localStorage.setItem(key, JSON.stringify(checks));
+    } catch (err) {
+      console.warn('체크 저장 실패', err);
+    }
+  }
+
+  function render(data, storageKey) {
+    var checks = loadChecks(storageKey);
+    var onlyMissing = false;
+    var rows = [];
+
+    document.title = data.s + ' 프라이머 박스';
+    document.getElementById('sheet').textContent = data.s;
+    head.hidden = false;
+
+    function refresh() {
+      var missing = rows.filter(function (r) { return r.input.checked; }).length;
+      countEl.textContent = '';
+      countEl.append('못 찾음 ');
+      var strong = document.createElement('b');
+      strong.textContent = String(missing);
+      countEl.append(strong, ' / 전체 ' + rows.length);
+
+      rows.forEach(function (r) {
+        r.el.classList.toggle('miss', r.input.checked);
+        r.el.hidden = onlyMissing && !r.input.checked;
+      });
+    }
+
+    data.i.forEach(function (item, index) {
+      var el = document.createElement('div');
+      el.className = 'row';
+
+      var info = document.createElement('div');
+      var primer = document.createElement('div');
+      primer.className = 'primer';
+      primer.textContent = item[0];
+      var cust = document.createElement('div');
+      cust.className = 'cust';
+      cust.textContent = item[1];
+      info.append(primer, cust);
+
+      var box = document.createElement('div');
+      box.className = 'box';
+      box.textContent = item[2];
+      var c = boxColor(item[2]);
+      box.style.background = c.bg;
+      box.style.color = c.color;
+
+      var label = document.createElement('label');
+      label.className = 'check';
+      var input = document.createElement('input');
+      input.type = 'checkbox';
+      input.checked = !!checks[index];
+      input.setAttribute('aria-label', item[0] + ' 못 찾음');
+      input.addEventListener('change', function () {
+        if (input.checked) checks[index] = 1;
+        else delete checks[index];
+        saveChecks(storageKey, checks);
+        refresh();
+      });
+      label.append(input, '못 찾음');
+
+      el.append(info, box, label);
+      list.append(el);
+      rows.push({ el: el, input: input });
+    });
+
+    filterBtn.addEventListener('click', function () {
+      onlyMissing = !onlyMissing;
+      filterBtn.setAttribute('aria-pressed', String(onlyMissing));
+      filterBtn.textContent = onlyMissing ? '전체 보기' : '못 찾은 것만';
+      refresh();
+    });
+
+    refresh();
+  }
+
+  async function main() {
+    var match = location.hash.match(/^#d=([A-Za-z0-9_-]+)$/);
+    if (!match) {
+      showMessage('LIMS 박스 요약 화면의 QR을 찍어서 열어 주세요.');
+      return;
+    }
+    if (typeof DecompressionStream === 'undefined') {
+      showMessage('이 브라우저에서는 열 수 없습니다. 크롬이나 사파리를 최신 버전으로 업데이트해 주세요.');
+      return;
+    }
+
+    try {
+      var text = await inflate(base64UrlToBytes(match[1]));
+      var data = JSON.parse(text);
+      if (!data || typeof data.s !== 'string' || !Array.isArray(data.i)) {
+        throw new Error('형식 오류');
+      }
+      render(data, 'lims-notfound:' + data.s + ':' + hashText(match[1]));
+    } catch (err) {
+      console.error(err);
+      showMessage('QR 내용을 읽지 못했습니다. LIMS에서 QR을 다시 띄워 찍어 주세요.');
+    }
+  }
+
+  main();
+})();
+</script>
+</body>
+</html>
