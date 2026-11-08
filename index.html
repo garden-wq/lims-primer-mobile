@@ -243,9 +243,9 @@ main { padding: 8px 12px 32px; }
       emptyEl.hidden = !(onlyMissing && missing === 0);
     }
 
-    // '박스#칸번호' 형식은 같은 박스로 묶고 칸번호는 프라이머 줄에 표시
+    // '제작#296'처럼 # 뒤 번호까지 포함한 전체 이름이 하나의 박스
     function getGroup(boxName) {
-      var name = String(boxName).split('#')[0].trim() || String(boxName);
+      var name = String(boxName).trim();
       if (Object.prototype.hasOwnProperty.call(groupByName, name)) {
         return groupByName[name];
       }
@@ -303,8 +303,7 @@ main { padding: 8px 12px 32px; }
       primer.textContent = item[0];
       var cust = document.createElement('div');
       cust.className = 'cust';
-      var slot = String(item[2]).indexOf('#') !== -1 ? ' · ' + item[2] : '';
-      cust.textContent = item[1] + slot;
+      cust.textContent = item[1];
       info.append(primer, cust);
 
       var label = document.createElement('label');
