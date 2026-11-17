@@ -32,7 +32,37 @@ header {
   background: #fff;
   border-bottom: 1px solid var(--line);
 }
+header[hidden] { display: none; }
 h1 { margin: 0; font-size: 18px; }
+.sheets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.sheet-chip {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 700;
+}
+.sheet-chip button {
+  min-height: 34px;
+  border: 0;
+  font: inherit;
+  background: #fff;
+  color: var(--accent);
+}
+.sheet-chip .sheet-toggle { padding: 0 10px; }
+.sheet-chip .sheet-toggle[aria-pressed="true"] { background: var(--accent); color: #fff; }
+.sheet-chip .sheet-del {
+  padding: 0 9px;
+  border-left: 1px solid var(--accent);
+  color: var(--muted);
+}
 .bar {
   display: flex;
   align-items: center;
@@ -55,7 +85,7 @@ h1 { margin: 0; font-size: 18px; }
 }
 #filter[aria-pressed="true"] { background: var(--accent); color: #fff; }
 main { padding: 8px 12px 32px; }
-.group { margin-bottom: 8px; scroll-margin-top: 104px; }
+.group { margin-bottom: 8px; scroll-margin-top: 150px; }
 .group[hidden] { display: none; }
 .group-head {
   display: flex;
@@ -99,6 +129,17 @@ main { padding: 8px 12px 32px; }
 .row.miss { border-color: var(--miss); background: var(--miss-bg); }
 .primer { font-size: 18px; font-weight: 800; overflow-wrap: anywhere; }
 .cust { margin-top: 2px; font-size: 15px; font-weight: 600; color: var(--muted); overflow-wrap: anywhere; }
+.sheet-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 6px;
+  background: #e7f1ff;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  vertical-align: middle;
+}
 #empty { padding: 32px 16px; font-size: 15px; text-align: center; color: var(--muted); }
 .check {
   display: flex;
@@ -112,12 +153,13 @@ main { padding: 8px 12px 32px; }
   color: var(--miss);
 }
 .check input { width: 26px; height: 26px; margin: 0; accent-color: var(--miss); }
-#message { padding: 40px 20px; font-size: 16px; line-height: 1.5; text-align: center; }
+#message, .note { padding: 40px 20px; font-size: 16px; line-height: 1.5; text-align: center; white-space: pre-line; }
 </style>
 </head>
 <body>
 <header hidden id="head">
-  <h1 id="sheet"></h1>
+  <h1 id="title"></h1>
+  <div class="sheets" id="sheets"></div>
   <div class="bar">
     <span id="count"></span>
     <button id="filter" type="button" aria-pressed="false">못 찾은 것만</button>
@@ -131,6 +173,10 @@ main { padding: 8px 12px 32px; }
 (function () {
   'use strict';
 
+  // 찍은 시트 목록은 이 핸드폰에만 저장되고, 3일 지나면 자동 삭제
+  var SHEETS_KEY = 'lims-sheets-v1';
+  var KEEP_MS = 3 * 24 * 60 * 60 * 1000;
+
   var BOX_COLORS = {
     C: { bg: '#ffe0e6', color: '#d63384' },
     H: { bg: '#e6f4ea', color: '#137333' },
@@ -141,16 +187,25 @@ main { padding: 8px 12px 32px; }
     '제작': { bg: '#f3d9fa', color: '#9c36b5' }
   };
   var ETC_COLOR = { bg: '#e8e8ff', color: '#2b2b88' };
+  var COLD_ROOM_PRIORITY = ['제작', 'P', 'K', 'H', 'A', 'B', 'C', '마크', '수인성', '박민영', '국방부'];
 
   var head = document.getElementById('head');
   var list = document.getElementById('list');
   var message = document.getElementById('message');
   var countEl = document.getElementById('count');
   var filterBtn = document.getElementById('filter');
+  var sheetsEl = document.getElementById('sheets');
+  var emptyEl = document.getElementById('empty');
+
+  var onlyMissing = false;
+  var openBox = null;
+  var rows = [];
+  var groups = [];
 
   function showMessage(text) {
     head.hidden = true;
     list.textContent = '';
+    emptyEl.hidden = true;
     message.textContent = text;
     message.hidden = false;
   }
@@ -160,6 +215,14 @@ main { padding: 8px 12px 32px; }
     if (BOX_COLORS[upper]) return BOX_COLORS[upper];
     if (upper.indexOf('제작') !== -1) return BOX_COLORS['제작'];
     return BOX_COLORS[upper.charAt(0)] || ETC_COLOR;
+  }
+
+  function priority(name) {
+    var upper = String(name).toUpperCase();
+    for (var i = 0; i < COLD_ROOM_PRIORITY.length; i++) {
+      if (upper.indexOf(COLD_ROOM_PRIORITY[i]) !== -1) return i;
+    }
+    return 900;
   }
 
   function base64UrlToBytes(text) {
@@ -186,7 +249,7 @@ main { padding: 8px 12px 32px; }
   }
 
   // 브라우저 저장소가 막혀 있어도 화면은 계속 동작하도록 처리
-  function loadChecks(key) {
+  function loadJson(key) {
     try {
       var parsed = JSON.parse(localStorage.getItem(key) || '{}');
       return parsed && typeof parsed === 'object' ? parsed : {};
@@ -195,78 +258,174 @@ main { padding: 8px 12px 32px; }
     }
   }
 
-  function saveChecks(key, checks) {
+  function saveJson(key, value) {
     try {
-      localStorage.setItem(key, JSON.stringify(checks));
+      localStorage.setItem(key, JSON.stringify(value));
     } catch (err) {
-      console.warn('체크 저장 실패', err);
+      console.warn('저장 실패', err);
     }
   }
 
-  function render(data, storageKey) {
-    var checks = loadChecks(storageKey);
-    var onlyMissing = false;
-    var rows = [];
-    var groups = [];
-    var groupByName = {};
-    var openGroup = null;
-    var emptyEl = document.getElementById('empty');
+  function removeKey(key) {
+    try { localStorage.removeItem(key); } catch (err) { /* 무시 */ }
+  }
 
-    document.title = data.s + ' 프라이머 박스';
-    document.getElementById('sheet').textContent = data.s;
+  function checkKey(sheet) {
+    return 'lims-notfound:' + sheet.s + ':' + sheet.h;
+  }
+
+  function loadSheets() {
+    var sheets = loadJson(SHEETS_KEY);
+    var now = Date.now();
+    var changed = false;
+    Object.keys(sheets).forEach(function (name) {
+      var sh = sheets[name];
+      if (!sh || !Array.isArray(sh.i) || now - (sh.t || 0) > KEEP_MS) {
+        if (sh && sh.h) removeKey(checkKey(sh));
+        delete sheets[name];
+        changed = true;
+      }
+    });
+    if (changed) saveJson(SHEETS_KEY, sheets);
+    return sheets;
+  }
+
+  // 시트 이름이 H241117-01 같은 형태면 뒤쪽 '-01'만 짧게 표시
+  function shortName(name) {
+    var m = String(name).match(/^H\d{6}(-.+)$/i);
+    return m ? m[1] : name;
+  }
+
+  function sortedSheetNames(sheets) {
+    return Object.keys(sheets).sort(function (a, b) {
+      return a.localeCompare(b, undefined, { numeric: true });
+    });
+  }
+
+  function refresh() {
+    var missing = rows.filter(function (r) { return r.input.checked; }).length;
+    countEl.textContent = '';
+    countEl.append('못 찾음 ');
+    var strong = document.createElement('b');
+    strong.textContent = String(missing);
+    countEl.append(strong, ' / 전체 ' + rows.length);
+
+    rows.forEach(function (r) {
+      r.el.classList.toggle('miss', r.input.checked);
+      r.el.hidden = onlyMissing && !r.input.checked;
+    });
+
+    groups.forEach(function (g) {
+      var groupMissing = g.rows.filter(function (r) { return r.input.checked; }).length;
+      var expanded = onlyMissing || g.name === openBox;
+      g.el.hidden = onlyMissing && groupMissing === 0;
+      g.body.hidden = !expanded;
+      g.head.setAttribute('aria-expanded', String(expanded));
+      g.arrow.textContent = expanded ? '▲' : '▼';
+      g.missBadge.textContent = '못 찾음 ' + groupMissing;
+      g.missBadge.hidden = groupMissing === 0;
+    });
+
+    emptyEl.hidden = !(onlyMissing && missing === 0);
+  }
+
+  function renderAll() {
+    var sheets = loadSheets();
+    var names = sortedSheetNames(sheets);
+
+    rows = [];
+    groups = [];
+    list.textContent = '';
+    sheetsEl.textContent = '';
+
+    if (!names.length) {
+      showMessage('LIMS 박스 요약 화면의 QR을 찍어서 열어 주세요.\n여러 시트의 QR을 찍으면 여기에 합쳐서 보입니다.');
+      return;
+    }
+    message.hidden = true;
     head.hidden = false;
 
-    function refresh() {
-      var missing = rows.filter(function (r) { return r.input.checked; }).length;
-      countEl.textContent = '';
-      countEl.append('못 찾음 ');
-      var strong = document.createElement('b');
-      strong.textContent = String(missing);
-      countEl.append(strong, ' / 전체 ' + rows.length);
+    var shown = names.filter(function (n) { return !sheets[n].off; });
+    document.getElementById('title').textContent =
+      '프라이머 박스 (시트 ' + shown.length + ' / ' + names.length + '개)';
+    document.title = '프라이머 박스 ' + shown.map(shortName).join(', ');
 
-      rows.forEach(function (r) {
-        r.el.classList.toggle('miss', r.input.checked);
-        r.el.hidden = onlyMissing && !r.input.checked;
+    // 시트 칩: 누르면 보기/숨기기, X는 삭제
+    names.forEach(function (name) {
+      var sh = sheets[name];
+      var chip = document.createElement('span');
+      chip.className = 'sheet-chip';
+
+      var toggle = document.createElement('button');
+      toggle.type = 'button';
+      toggle.className = 'sheet-toggle';
+      toggle.textContent = name + ' (' + sh.i.length + ')';
+      toggle.setAttribute('aria-pressed', String(!sh.off));
+      toggle.addEventListener('click', function () {
+        var all = loadSheets();
+        if (!all[name]) return;
+        all[name].off = !all[name].off;
+        saveJson(SHEETS_KEY, all);
+        renderAll();
       });
 
-      groups.forEach(function (g) {
-        var groupMissing = g.rows.filter(function (r) { return r.input.checked; }).length;
-        var expanded = onlyMissing || g === openGroup;
-        g.el.hidden = onlyMissing && groupMissing === 0;
-        g.body.hidden = !expanded;
-        g.head.setAttribute('aria-expanded', String(expanded));
-        g.arrow.textContent = expanded ? '▲' : '▼';
-        g.missBadge.textContent = '못 찾음 ' + groupMissing;
-        g.missBadge.hidden = groupMissing === 0;
+      var del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'sheet-del';
+      del.textContent = '✕';
+      del.setAttribute('aria-label', name + ' 삭제');
+      del.addEventListener('click', function () {
+        if (!window.confirm(name + ' 시트를 목록에서 지울까요?')) return;
+        var all = loadSheets();
+        if (all[name]) removeKey(checkKey(all[name]));
+        delete all[name];
+        saveJson(SHEETS_KEY, all);
+        renderAll();
       });
 
-      emptyEl.hidden = !(onlyMissing && missing === 0);
-    }
+      chip.append(toggle, del);
+      sheetsEl.append(chip);
+    });
 
-    // '제작#296'처럼 # 뒤 번호까지 포함한 전체 이름이 하나의 박스
-    function getGroup(boxName) {
-      var name = String(boxName).trim();
-      if (Object.prototype.hasOwnProperty.call(groupByName, name)) {
-        return groupByName[name];
-      }
+    // 보이는 시트의 프라이머를 박스별로 합치기
+    var multi = shown.length > 1;
+    var byBox = {};
+    var boxNames = [];
+    shown.forEach(function (name) {
+      var sh = sheets[name];
+      var checks = loadJson(checkKey(sh));
+      sh.i.forEach(function (item, index) {
+        var box = String(item[2]).trim();
+        if (!byBox[box]) { byBox[box] = []; boxNames.push(box); }
+        byBox[box].push({ item: item, index: index, sheet: sh, checks: checks });
+      });
+    });
 
+    boxNames.sort(function (a, b) {
+      var pa = priority(a), pb = priority(b);
+      if (pa !== pb) return pa - pb;
+      return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+    });
+
+    boxNames.forEach(function (box) {
       var el = document.createElement('section');
       el.className = 'group';
 
       var headBtn = document.createElement('button');
       headBtn.type = 'button';
       headBtn.className = 'group-head';
-      var c = boxColor(name);
+      var c = boxColor(box);
       headBtn.style.background = c.bg;
       headBtn.style.color = c.color;
 
       var nameEl = document.createElement('span');
       nameEl.className = 'group-name';
-      nameEl.textContent = name;
+      nameEl.textContent = box;
       var missBadge = document.createElement('span');
       missBadge.className = 'group-miss';
       var countText = document.createElement('span');
       countText.className = 'group-count';
+      countText.textContent = byBox[box].length + '개';
       var arrow = document.createElement('span');
       arrow.className = 'group-arrow';
       headBtn.append(nameEl, missBadge, countText, arrow);
@@ -276,95 +435,118 @@ main { padding: 8px 12px 32px; }
       el.append(headBtn, body);
       list.append(el);
 
-      var group = {
-        el: el, head: headBtn, body: body, arrow: arrow,
-        missBadge: missBadge, countText: countText, rows: []
-      };
+      var group = { name: box, el: el, head: headBtn, body: body, arrow: arrow, missBadge: missBadge, rows: [] };
       groups.push(group);
-      groupByName[name] = group;
 
       headBtn.addEventListener('click', function () {
         if (onlyMissing) return;
-        openGroup = openGroup === group ? null : group;
+        openBox = openBox === box ? null : box;
         refresh();
-        if (openGroup === group) el.scrollIntoView({ block: 'start' });
+        if (openBox === box) el.scrollIntoView({ block: 'start' });
       });
-      return group;
+
+      byBox[box].forEach(function (entry) {
+        var item = entry.item;
+        var rowEl = document.createElement('div');
+        rowEl.className = 'row';
+
+        var info = document.createElement('div');
+        var primer = document.createElement('div');
+        primer.className = 'primer';
+        primer.textContent = item[0];
+        if (multi) {
+          var tag = document.createElement('span');
+          tag.className = 'sheet-tag';
+          tag.textContent = shortName(entry.sheet.s);
+          primer.append(tag);
+        }
+        var cust = document.createElement('div');
+        cust.className = 'cust';
+        cust.textContent = item[1];
+        info.append(primer, cust);
+
+        var label = document.createElement('label');
+        label.className = 'check';
+        var input = document.createElement('input');
+        input.type = 'checkbox';
+        input.checked = !!entry.checks[entry.index];
+        input.setAttribute('aria-label', item[0] + ' 못 찾음');
+        input.addEventListener('change', function () {
+          if (input.checked) entry.checks[entry.index] = 1;
+          else delete entry.checks[entry.index];
+          saveJson(checkKey(entry.sheet), entry.checks);
+          refresh();
+        });
+        label.append(input, '못 찾음');
+
+        rowEl.append(info, label);
+        body.append(rowEl);
+        var row = { el: rowEl, input: input };
+        rows.push(row);
+        group.rows.push(row);
+      });
+    });
+
+    if (!boxNames.length) {
+      emptyEl.hidden = true;
+      var note = document.createElement('div');
+      note.className = 'note';
+      note.textContent = '보이는 시트가 없습니다. 위의 시트 이름을 눌러 켜 주세요.';
+      list.append(note);
     }
-
-    data.i.forEach(function (item, index) {
-      var group = getGroup(item[2]);
-      var el = document.createElement('div');
-      el.className = 'row';
-
-      var info = document.createElement('div');
-      var primer = document.createElement('div');
-      primer.className = 'primer';
-      primer.textContent = item[0];
-      var cust = document.createElement('div');
-      cust.className = 'cust';
-      cust.textContent = item[1];
-      info.append(primer, cust);
-
-      var label = document.createElement('label');
-      label.className = 'check';
-      var input = document.createElement('input');
-      input.type = 'checkbox';
-      input.checked = !!checks[index];
-      input.setAttribute('aria-label', item[0] + ' 못 찾음');
-      input.addEventListener('change', function () {
-        if (input.checked) checks[index] = 1;
-        else delete checks[index];
-        saveChecks(storageKey, checks);
-        refresh();
-      });
-      label.append(input, '못 찾음');
-
-      el.append(info, label);
-      group.body.append(el);
-      var row = { el: el, input: input };
-      rows.push(row);
-      group.rows.push(row);
-    });
-
-    groups.forEach(function (g) {
-      g.countText.textContent = g.rows.length + '개';
-    });
-    if (groups.length === 1) openGroup = groups[0];
-
-    filterBtn.addEventListener('click', function () {
-      onlyMissing = !onlyMissing;
-      filterBtn.setAttribute('aria-pressed', String(onlyMissing));
-      filterBtn.textContent = onlyMissing ? '전체 보기' : '못 찾은 것만';
-      refresh();
-    });
+    if (groups.length === 1) openBox = groups[0].name;
 
     refresh();
   }
 
-  async function main() {
+  filterBtn.addEventListener('click', function () {
+    onlyMissing = !onlyMissing;
+    filterBtn.setAttribute('aria-pressed', String(onlyMissing));
+    filterBtn.textContent = onlyMissing ? '전체 보기' : '못 찾은 것만';
+    refresh();
+  });
+
+  // QR로 열렸으면 그 시트를 저장 목록에 추가 (같은 시트를 다시 찍으면 새 내용으로 교체)
+  async function addSheetFromHash() {
     var match = location.hash.match(/^#d=([A-Za-z0-9_-]+)$/);
-    if (!match) {
-      showMessage('LIMS 박스 요약 화면의 QR을 찍어서 열어 주세요.');
-      return;
-    }
+    if (!match) return true;
     if (typeof DecompressionStream === 'undefined') {
       showMessage('이 브라우저에서는 열 수 없습니다. 크롬이나 사파리를 최신 버전으로 업데이트해 주세요.');
-      return;
+      return false;
     }
-
     try {
       var text = await inflate(base64UrlToBytes(match[1]));
       var data = JSON.parse(text);
       if (!data || typeof data.s !== 'string' || !Array.isArray(data.i)) {
         throw new Error('형식 오류');
       }
-      render(data, 'lims-notfound:' + data.s + ':' + hashText(match[1]));
+      var sheets = loadSheets();
+      var h = hashText(match[1]);
+      var old = sheets[data.s];
+      if (old && old.h !== h) removeKey(checkKey(old));
+      sheets[data.s] = { s: data.s, i: data.i, h: h, t: Date.now() };
+      saveJson(SHEETS_KEY, sheets);
+      // 주소의 긴 데이터는 지워서, 새로고침해도 지운 시트가 되살아나지 않게 함
+      try { history.replaceState(null, '', location.pathname + location.search); } catch (err) { /* 무시 */ }
+      return true;
     } catch (err) {
       console.error(err);
       showMessage('QR 내용을 읽지 못했습니다. LIMS에서 QR을 다시 띄워 찍어 주세요.');
+      return false;
     }
   }
+
+  async function main() {
+    if (await addSheetFromHash()) renderAll();
+  }
+
+  // 다른 탭에서 새 시트를 찍으면 이 탭에도 반영
+  window.addEventListener('storage', function (e) {
+    if (e.key === SHEETS_KEY) renderAll();
+  });
+  window.addEventListener('pageshow', function (e) {
+    if (e.persisted) renderAll();
+  });
 
   main();
 })();
